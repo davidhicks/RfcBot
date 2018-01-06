@@ -8,6 +8,9 @@ from dateutil.parser import parse
 from xml.etree import ElementTree
 import re
 
+#debug
+from pprint import pprint
+
 def get_rfc_database():
 	url = 'https://www.rfc-editor.org/in-notes/rfc-index.xml'
 	headers = {'Accept' : 'application/xml'}
@@ -166,12 +169,13 @@ def match_existing_items_by_instanceof_and_rfcnum(rfcs):
 			continue
 		rfcs[rfc]['item'] = item
 
-def find_source_with_claim(repo, sources, claim_property_id, claim_value):
+def find_source_with_claim(repo, sources, property_id_to_find, claim_value_to_find):
 	for source in sources:
-		for claim in source:
-			if claim.pid == claim_property_id:
-				if claim.target_equals(claim_value):
-					return source
+		for claim_property_id, claims in source.items():
+			for claim in claims:
+				if claim_property_id == property_id_to_find:
+					if claim.target_equals(claim_value_to_find):
+						return source
 	return None
 
 def create_retrieved_claim_for_today(repo):
@@ -189,23 +193,39 @@ def add_source_for_claim(repo, claim):
 		new_stated_in_claim = pywikibot.Claim(repo, 'P248')
 		new_stated_in_claim.setTarget(rfc_editor_database_item)
 		new_retrieved_claim = create_retrieved_claim_for_today(repo)
-		claim.addSources([new_stated_in_claim, new_retrieved_claim], bot=True)
+		claim.addSources([new_stated_in_claim, new_retrieved_claim])
 	else:
 		existing_retrieved_claim = False
-		for source_claim in source_with_required_claim:
-			if source_claim.pid == 'P813':
+		for source_property_id, source_claim in source_with_required_claim.items():
+			if source_property_id == 'P813':
 				existing_retrieved_claim = True
 				break
 		if not existing_retrieved_claim:
 			new_source = source_with_required_claim
 			new_retrieved_claim = create_retrieved_claim_for_today(repo)
 			new_source.append(new_retrieved_claim)
-			claim.removeSources(source_with_required_claim, bot=True)
-			claim.addSources(new_source, bot=True)
+			claim.removeSources(source_with_required_claim)
+			claim.addSources(new_source)
 
 def update_existing_or_create_new_claim(repo, item, existing_claims, property_id, value):
 	try:
 		for existing_claim in existing_claims[property_id]:
+			#Special case required for wbTime as per https://doc.wikimedia.org/pywikibot/_modules/pywikibot/page.html#Claim.target_equals
+			target_value = existing_claim.getTarget()
+			if (isinstance(value, pywikibot.WbTime) and isinstance(target_value, pywikibot.WbTime)):
+				dates_match = False
+				if target_value.precision == target_value.PRECISION['year']:
+					if target_value.year == value.year:
+						dates_match = True
+				elif target_value.precision == target_value.PRECISION['month']:
+					if (target_value.year == value.year and target_value.month == value.month):
+						dates_match = True
+				elif target_value.precision == target_value.PRECISION['day']:
+					if (target_value.year == value.year and target_value.month == value.month and target_value.day == value.day):
+						dates_match = True
+				if dates_match:
+					add_source_for_claim(repo, existing_claim)
+					return
 			if existing_claim.target_equals(value):
 				add_source_for_claim(repo, existing_claim)
 				return
@@ -214,7 +234,7 @@ def update_existing_or_create_new_claim(repo, item, existing_claims, property_id
 		pass
 	new_claim = pywikibot.Claim(repo, property_id)
 	new_claim.setTarget(value)
-	item.addClaim(new_claim, bot=True)
+	item.addClaim(new_claim)
 	add_source_for_claim(repo, new_claim)
 
 def update_existing_or_create_new_claim_item(repo, item, existing_claims, property_id, target_item_id):
@@ -272,6 +292,8 @@ def update_claims_for_item(repo, rfc, rfc_data, item):
 			processed_claims['full_work_available_at_txt_ietf'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_txt_ietf)
 			url_to_full_work_txt_rfceditor = 'https://www.rfc-editor.org/rfc/rfc' + rfc + '.txt'
 			processed_claims['full_work_available_at_txt_rfceditor'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_txt_rfceditor)
+			url_to_full_work_pdf_ascii = 'https://www.rfc-editor.org/pdfrfc/rfc' + rfc + '.txt.pdf'
+			processed_claims['full_work_available_at_pdf_ascii'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_pdf_ascii)
 		elif file_format['type'] == 'PS':
 			file_format_count += 1
 			processed_claims['file_format' + str(file_format_count)] = update_existing_or_create_new_claim_item(repo, item, existing_claims, 'P2701', 'Q218170')
@@ -282,14 +304,6 @@ def update_claims_for_item(repo, rfc, rfc_data, item):
 			processed_claims['file_format' + str(file_format_count)] = update_existing_or_create_new_claim_item(repo, item, existing_claims, 'P2701', 'Q42332')
 			url_to_full_work_pdf = 'https://www.rfc-editor.org/rfc/rfc' + rfc + '.pdf'
 			processed_claims['full_work_available_at_pdf'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_pdf)
-			ascii_search_success = 0
-			for ascii_search_file_format in rfc_data['formats']:
-				if ascii_search_file_format['type'] == 'ASCII':
-					ascii_search_success = 1
-					break
-			if ascii_search_success == 1:
-				url_to_full_work_pdf_ascii = 'https://www.rfc-editor.org/pdfrfc/rfc' + rfc + '.txt.pdf'
-				processed_claims['full_work_available_at_pdf_ascii'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_pdf_ascii)
 		else:
 			print('Error: unknown file format type "' + file_format[type] + '" detected for RFC' + rfc)
 			continue
@@ -310,6 +324,7 @@ for rfc, data in rfcs.items():
 	if 'item' in rfcs[rfc]:
 		item = pywikibot.ItemPage(repo, rfcs[rfc]['item'])
 	else:
+		continue
 		print('Creating item for ' + rfc)
 		new_item = pywikibot.ItemPage(repo)
 		new_title = rfcs[rfc]['title']
@@ -318,13 +333,13 @@ for rfc, data in rfcs.items():
 			print('Error: could not create new item for ' + rfc + ' due to the automatically generated label being too long')
 			continue
 		labels = {'en': new_label}
-		new_item.editLabels(labels=labels, summary='add English label: ' + new_label, bot=True)
+		new_item.editLabels(labels=labels, summary='add English label: ' + new_label)
 		new_description = 'request for comments publication'
 		descriptions = {'en': new_description}
-		new_item.editDescriptions(descriptions=descriptions, summary='add English description: ' + new_description, bot=True)
+		new_item.editDescriptions(descriptions=descriptions, summary='add English description: ' + new_description)
 		new_aliases = ['RFC' + rfc, new_title]
 		aliases = {'en': new_aliases}
-		new_item.editAliases(aliases=aliases, summary='add English aliases: ' + '|'.join(new_aliases), bot=True)
+		new_item.editAliases(aliases=aliases, summary='add English aliases: ' + '|'.join(new_aliases))
 		newid = new_item.getID()
 		item = pywikibot.ItemPage(repo, newid)
 	print('Processing claims for ' + rfc)
