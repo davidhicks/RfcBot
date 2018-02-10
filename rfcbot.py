@@ -36,19 +36,19 @@ def parse_rfc_database(root):
 		if id_element is None:
 			print('Error: could not find doc-id element')
 			continue
-		rfc_id = re.sub(r'^RFC0*', r'', id_element.text)
+		rfc_id = re.sub(r'^RFC0*', r'', id_element.text.strip())
 		title_element = rfc_element.find('index:title', ns)
 		if title_element is None:
 			print('Error: could not find title element for rfc_id=' + rfc_id)
 			continue
-		rfc['title'] = title_element.text
+		rfc['title'] = title_element.text.strip()
 		author_names = []
 		for author_element in rfc_element.findall('index:author', ns):
 			name_element = author_element.find('index:name', ns)
 			if name_element is None:
 				print('Error: could not find name element for rfc_id=' + rfc_id)
 				continue
-			author_names.append(name_element.text)
+			author_names.append(name_element.text.strip())
 		if len(author_names) == 0:
 			print('Error: count not find any author elements for rfc_id=' + rfc_id)
 			continue
@@ -65,13 +65,13 @@ def parse_rfc_database(root):
 		if year_element is None:
 			print('Error: could not find year element for rfc_id=' + rfc_id)
 			continue
-		date_time = parse('1 ' + month_element.text + ' ' + year_element.text)
+		date_time = parse('1 ' + month_element.text.strip() + ' ' + year_element.text.strip())
 		rfc['date'] = date_time.isoformat('T')
 		doi_element = rfc_element.find('index:doi', ns)
 		if doi_element is None:
 			print('Error: could not find doi element for rfc_id=' + rfc_id)
 			continue
-		rfc['doi'] = doi_element.text
+		rfc['doi'] = doi_element.text.strip()
 		formats = []
 		for format_element in rfc_element.findall('index:format', ns):
 			format = {}
@@ -79,38 +79,38 @@ def parse_rfc_database(root):
 			if file_format_element is None:
 				print('Error: could not find file-format element for rfc_id=' + rfc_id)
 				continue
-			format['type'] = file_format_element.text
+			format['type'] = file_format_element.text.strip()
 			page_count_element = format_element.find('index:page-count', ns)
 			if page_count_element is not None:
-				format['page_count'] = int(page_count_element.text)
+				format['page_count'] = int(page_count_element.text.strip())
 			formats.append(format)
 		rfc['formats'] = formats;
 		obsoleted_by_element = rfc_element.find('index:obsoleted-by', ns)
 		if obsoleted_by_element is not None:
 			obsoleted_by = []
 			for obsoleted_by_doc_id_element in obsoleted_by_element.findall('index:doc-id', ns):
-				obsoleted_by.append(obsoleted_by_doc_id_element.text)
+				obsoleted_by.append(obsoleted_by_doc_id_element.text.strip())
 			if len(obsoleted_by) > 0:
 				rfc['obsoleted_by'] = obsoleted_by
 		obsoletes_element = rfc_element.find('index:obsoletes', ns)
 		if obsoletes_element is not None:
 			obsoletes = []
 			for obsoletes_doc_id_element in obsoletes_element.findall('index:doc-id', ns):
-				obsoletes.append(obsoletes_doc_id_element.text)
+				obsoletes.append(obsoletes_doc_id_element.text.strip())
 			if len(obsoletes) > 0:
 				rfc['obsoletes'] = obsoletes
 		updated_by_element = rfc_element.find('index:updated-by', ns)
 		if updated_by_element is not None:
 			updated_by = []
 			for updated_by_doc_id_element in updated_by_element.findall('index:doc-id', ns):
-				updated_by.append(updated_by_doc_id_element.text)
+				updated_by.append(updated_by_doc_id_element.text.strip())
 			if len(updated_by) > 0:
 				rfc['updated_by'] = updated_by
 		updates_element = rfc_element.find('index:updates', ns)
 		if updates_element is not None:
 			updates = []
 			for updates_doc_id_element in updates_element.findall('index:doc-id', ns):
-				updates.append(updates_doc_id_element.text)
+				updates.append(updates_doc_id_element.text.strip())
 			if len(updates) > 0:
 				rfc['updates'] = updates
 		rfcs[rfc_id] = rfc
@@ -309,8 +309,8 @@ def update_claims_for_item(repo, rfc, rfc_data, item):
 			continue
 
 print('Parsing RFC database')
-#rfcs = parse_rfc_database(get_rfc_database())
-rfcs = parse_rfc_database(load_local_rfc_database())
+rfcs = parse_rfc_database(get_rfc_database())
+#rfcs = parse_rfc_database(load_local_rfc_database())
 #DOI lookup query is too slow for the Wikidata query service
 #print('Finding existing Wikidata items via DOI property')
 #match_existing_items_by_doi(rfcs)
@@ -324,7 +324,6 @@ for rfc, data in rfcs.items():
 	if 'item' in rfcs[rfc]:
 		item = pywikibot.ItemPage(repo, rfcs[rfc]['item'])
 	else:
-		continue
 		print('Creating item for ' + rfc)
 		new_item = pywikibot.ItemPage(repo)
 		new_title = rfcs[rfc]['title']
