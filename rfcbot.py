@@ -85,34 +85,14 @@ def parse_rfc_database(root):
 				format['page_count'] = int(page_count_element.text.strip())
 			formats.append(format)
 		rfc['formats'] = formats;
-		obsoleted_by_element = rfc_element.find('index:obsoleted-by', ns)
-		if obsoleted_by_element is not None:
-			obsoleted_by = []
-			for obsoleted_by_doc_id_element in obsoleted_by_element.findall('index:doc-id', ns):
-				obsoleted_by.append(obsoleted_by_doc_id_element.text.strip())
-			if len(obsoleted_by) > 0:
-				rfc['obsoleted_by'] = obsoleted_by
-		obsoletes_element = rfc_element.find('index:obsoletes', ns)
-		if obsoletes_element is not None:
-			obsoletes = []
-			for obsoletes_doc_id_element in obsoletes_element.findall('index:doc-id', ns):
-				obsoletes.append(obsoletes_doc_id_element.text.strip())
-			if len(obsoletes) > 0:
-				rfc['obsoletes'] = obsoletes
-		updated_by_element = rfc_element.find('index:updated-by', ns)
-		if updated_by_element is not None:
-			updated_by = []
-			for updated_by_doc_id_element in updated_by_element.findall('index:doc-id', ns):
-				updated_by.append(updated_by_doc_id_element.text.strip())
-			if len(updated_by) > 0:
-				rfc['updated_by'] = updated_by
-		updates_element = rfc_element.find('index:updates', ns)
-		if updates_element is not None:
-			updates = []
-			for updates_doc_id_element in updates_element.findall('index:doc-id', ns):
-				updates.append(updates_doc_id_element.text.strip())
-			if len(updates) > 0:
-				rfc['updates'] = updates
+		link_types = ['obsoleted_by', 'obsoletes', 'updated_by', 'updates']
+		for link_type in link_types:
+			rfc[link_type] = []
+			link_type_element = rfc_element.find('index:' + re.sub(r'_', r'-', link_type), ns)
+			if link_type_element is not None:
+				for linked_rfc_element in link_type_element.findall('index:doc-id', ns):
+					linked_rfc_id = re.sub(r'^RFC0*', r'', linked_rfc_element.text.strip())
+					rfc[link_type].append(linked_rfc_id)
 		rfcs[rfc_id] = rfc
 	return rfcs
 
@@ -147,7 +127,7 @@ def match_existing_items_by_doi(rfcs):
 
 def get_existing_items_with_instanceof_and_rfcnum():
 	sparqlquery = SparqlQuery()
-	response = sparqlquery.query('SELECT ?rfcid ?item WHERE { ?item wdt:P31 wd:Q212971 . ?item wdt:P892 ?rfcid }')
+	response = sparqlquery.query('SELECT ?rfcid ?item WHERE { ?item wdt:P31/wdt:P279* wd:Q212971 . ?item wdt:P892 ?rfcid }')
 	bindings = response['results']['bindings']
 	existing_items = {}
 	for binding in bindings:
@@ -168,6 +148,22 @@ def match_existing_items_by_instanceof_and_rfcnum(rfcs):
 			print('Error: probably invalid RFC identifier ' + rfc + ' detected for Wikidata item ' + item)
 			continue
 		rfcs[rfc]['item'] = item
+
+def resolve_links_between_rfcs(rfcs):
+	link_types = ['obsoleted_by', 'obsoletes', 'updated_by', 'updates']
+	for rfc, data in rfcs.items():
+		for link_type in link_types:
+			rfcs[rfc][link_type + '_items'] = []
+			for linked_rfc_id in rfcs[rfc][link_type]:
+				if linked_rfc_id in rfcs:
+					if 'item' in rfcs[linked_rfc_id]:
+						rfcs[rfc][link_type + '_items'].append(rfcs[linked_rfc_id]['item'])
+					else:
+						print('Error: RFC ' + rfc + ' has an ' + link_type + ' link to RFC ' + linked_rfc_id + ' but a Wikidata item does not exist for the RFC ' + linked_rfc_id)
+						continue
+				else:
+					print('Error: RFC ' + rfc + ' has an ' + link_type + ' link to RFC ' + linked_rfc_id + ' but RFC ' + linked_rfc_id + ' has not been published')
+					continue
 
 def find_source_with_claim(repo, sources, property_id_to_find, claim_value_to_find):
 	for source in sources:
@@ -207,7 +203,16 @@ def add_source_for_claim(repo, claim):
 			claim.removeSources(source_with_required_claim)
 			claim.addSources(new_source)
 
-def update_existing_or_create_new_claim(repo, item, existing_claims, property_id, value):
+def add_qualifier_for_claim_item(repo, claim, qualifier_id, target_item_id):
+	if claim.has_qualifier(qualifier_id, target_item_id):
+		return
+	print('Adding missing file format qualifier ' + target_item_id)
+	new_qualifier = pywikibot.Claim(repo, qualifier_id)
+	target = pywikibot.ItemPage(repo, target_item_id)
+	new_qualifier.setTarget(target)
+	claim.addQualifier(new_qualifier)
+
+def update_existing_or_create_new_claim(repo, item, existing_claims, property_id, value, file_format_qualifier_item = None):
 	try:
 		for existing_claim in existing_claims[property_id]:
 			#Special case required for wbTime as per https://doc.wikimedia.org/pywikibot/_modules/pywikibot/page.html#Claim.target_equals
@@ -227,6 +232,8 @@ def update_existing_or_create_new_claim(repo, item, existing_claims, property_id
 					add_source_for_claim(repo, existing_claim)
 					return
 			if existing_claim.target_equals(value):
+				if file_format_qualifier_item is not None:
+					add_qualifier_for_claim_item(repo, existing_claim, 'P2701', file_format_qualifier_item)
 				add_source_for_claim(repo, existing_claim)
 				return
 	except KeyError:
@@ -235,7 +242,19 @@ def update_existing_or_create_new_claim(repo, item, existing_claims, property_id
 	new_claim = pywikibot.Claim(repo, property_id)
 	new_claim.setTarget(value)
 	item.addClaim(new_claim)
+	if file_format_qualifier_item is not None:
+		add_qualifier_for_claim_item(repo, new_claim, 'P2701', file_format_qualifier_item)
 	add_source_for_claim(repo, new_claim)
+
+def remove_p2701_claims(repo, item, existing_claims):
+	try:
+		claims_to_remove = []
+		for existing_claim in existing_claims['P2701']:
+			claims_to_remove.append(existing_claim)
+		print('Removing old P2701 file format claims')
+		item.removeClaims(claims_to_remove)
+	except KeyError:
+		return
 
 def update_existing_or_create_new_claim_item(repo, item, existing_claims, property_id, target_item_id):
 	value = pywikibot.ItemPage(repo, target_item_id)
@@ -283,30 +302,46 @@ def update_claims_for_item(repo, rfc, rfc_data, item):
 	for file_format in rfc_data['formats']:
 		if file_format['type'] == 'ASCII':
 			file_format_count += 1
-			processed_claims['file_format' + str(file_format_count)] = update_existing_or_create_new_claim_item(repo, item, existing_claims, 'P2701', 'Q1145976')
 			if 'page_count' in file_format:
 				processed_claims['page_count'] = update_existing_or_create_new_claim_quantity(repo, item, existing_claims, 'P1104', file_format['page_count'], None, None)
-			url_to_full_work_html = 'https://tools.ietf.org/html/rfc' + rfc
-			processed_claims['full_work_available_at_html'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_html)
 			url_to_full_work_txt_ietf = 'https://tools.ietf.org/rfc/rfc' + rfc + '.txt'
-			processed_claims['full_work_available_at_txt_ietf'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_txt_ietf)
+			processed_claims['full_work_available_at_txt_ietf'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_txt_ietf, 'Q1145976')
 			url_to_full_work_txt_rfceditor = 'https://www.rfc-editor.org/rfc/rfc' + rfc + '.txt'
-			processed_claims['full_work_available_at_txt_rfceditor'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_txt_rfceditor)
+			processed_claims['full_work_available_at_txt_rfceditor'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_txt_rfceditor, 'Q1145976')
 			url_to_full_work_pdf_ascii = 'https://www.rfc-editor.org/pdfrfc/rfc' + rfc + '.txt.pdf'
-			processed_claims['full_work_available_at_pdf_ascii'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_pdf_ascii)
+			processed_claims['full_work_available_at_pdf_ascii'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_pdf_ascii, 'Q42332')
 		elif file_format['type'] == 'PS':
 			file_format_count += 1
-			processed_claims['file_format' + str(file_format_count)] = update_existing_or_create_new_claim_item(repo, item, existing_claims, 'P2701', 'Q218170')
 			url_to_full_work_ps = 'https://www.rfc-editor.org/rfc/rfc' + rfc + '.ps'
-			processed_claims['full_work_available_at_ps'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_ps)
+			processed_claims['full_work_available_at_ps'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_ps, 'Q218170')
 		elif file_format['type'] == 'PDF':
 			file_format_count += 1
-			processed_claims['file_format' + str(file_format_count)] = update_existing_or_create_new_claim_item(repo, item, existing_claims, 'P2701', 'Q42332')
 			url_to_full_work_pdf = 'https://www.rfc-editor.org/rfc/rfc' + rfc + '.pdf'
-			processed_claims['full_work_available_at_pdf'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_pdf)
+			processed_claims['full_work_available_at_pdf'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_pdf, 'Q42332')
+		elif file_format['type'] == 'HTML':
+			file_format_count += 1
+			url_to_full_work_html = 'https://tools.ietf.org/html/rfc' + rfc
+			processed_claims['full_work_available_at_html'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P953', url_to_full_work_html, 'Q62626012')
 		else:
-			print('Error: unknown file format type "' + file_format[type] + '" detected for RFC' + rfc)
+			print('Error: unknown file format type "' + file_format['type'] + '" detected for RFC' + rfc)
 			continue
+	obsoleted_by_item_count = 0
+	for obsoleted_by_item in rfc_data['obsoleted_by_items']:
+		obsoleted_by_item_count += 1
+		processed_claims['obsoleted_by_item' + str(obsoleted_by_item_count)] = update_existing_or_create_new_claim_item(repo, item, existing_claims, 'P1366', obsoleted_by_item)
+	obsoletes_item_count = 0
+	for obsoletes_item in rfc_data['obsoletes_items']:
+		obsoletes_item_count += 1
+		processed_claims['obsoletes_item' + str(obsoletes_item_count)] = update_existing_or_create_new_claim_item(repo, item, existing_claims, 'P1365', obsoletes_item)
+	updated_by_item_count = 0
+	for updated_by_item in rfc_data['updated_by_items']:
+		updated_by_item_count += 1
+		processed_claims['updated_by_item' + str(updated_by_item_count)] = update_existing_or_create_new_claim_item(repo, item, existing_claims, 'P2567', updated_by_item)
+	updates_item_count = 0
+	for updates_item in rfc_data['updates_items']:
+		updates_item_count += 1
+		processed_claims['updates_item' + str(updates_item_count)] = update_existing_or_create_new_claim_item(repo, item, existing_claims, 'P144', updates_item)
+	remove_p2701_claims(repo, item, existing_claims)
 
 print('Parsing RFC database')
 rfcs = parse_rfc_database(get_rfc_database())
@@ -316,6 +351,8 @@ rfcs = parse_rfc_database(get_rfc_database())
 #match_existing_items_by_doi(rfcs)
 print('Finding existing Wikidata items via RFC ID and Instance Of properties')
 match_existing_items_by_instanceof_and_rfcnum(rfcs)
+print('Resolving links between RFCs')
+resolve_links_between_rfcs(rfcs)
 
 site = pywikibot.Site('wikidata', 'wikidata')
 repo = site.data_repository()
