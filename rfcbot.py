@@ -175,7 +175,7 @@ def find_source_with_claim(repo, sources, property_id_to_find, claim_value_to_fi
 	return None
 
 def create_retrieved_claim_for_today(repo):
-	now = datetime.datetime.now()
+	now = datetime.datetime.utcnow()
 	today_date = pywikibot.WbTime(year=now.year, month=now.month, day=now.day)
 	new_retrieved_claim = pywikibot.Claim(repo, 'P813')
 	new_retrieved_claim.setTarget(today_date)
