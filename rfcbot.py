@@ -294,10 +294,17 @@ def update_claims_for_item(repo, rfc, rfc_data, item):
 	publication_month = parse(rfc_data['date']).month
 	processed_claims['publication_date'] = update_existing_or_create_new_claim_date(repo, item, existing_claims, 'P577', publication_year, publication_month, None)
 	processed_claims['doi'] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P356', rfc_data['doi'])
+	author_stated_as_names = []
+	if 'P50' in existing_claims.keys():
+		for author in existing_claims['P50']:
+			if 'P1932' in author.qualifiers.keys():
+				for author_stated_as_name in author.qualifiers['P1932']:
+					author_stated_as_names.append(author_stated_as_name.getTarget())
 	author_name_count = 0
 	for author_name in rfc_data['authors']:
-		author_name_count += 1
-		processed_claims['author' + str(author_name_count)] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P2093', author_name)
+		if author_name not in author_stated_as_names:
+			author_name_count += 1
+			processed_claims['author' + str(author_name_count)] = update_existing_or_create_new_claim(repo, item, existing_claims, 'P2093', author_name)
 	file_format_count = 0
 	for file_format in rfc_data['formats']:
 		if file_format['type'] == 'ASCII':
